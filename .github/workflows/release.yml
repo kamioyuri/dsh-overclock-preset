@@ -2,7 +2,8 @@ name: release
 
 # 推 tag（v1.2.3）即发布：先跑结构自检，再把仓库内容打成
 # dsh-overclock-preset-<版本>.zip 挂到同名 GitHub Release 上。
-# 凭据用 runner 自带的 GITHUB_TOKEN，本地不需要任何 token。
+# 凭据用 runner 自带的 GITHUB_TOKEN，本地不需要任何 token；
+# 直接用 REST API 而不是 gh CLI，避免 runner 上 gh 版本差异（--attach 之类的旗标）。
 
 on:
   push:
@@ -36,6 +37,7 @@ jobs:
           rm -rf "dist/${NAME}/.git"
           (cd dist && zip -qr "${NAME}.zip" "${NAME}")
           echo "ARTIFACT=dist/${NAME}.zip" >> "$GITHUB_ENV"
+          echo "ASSET_NAME=${NAME}.zip" >> "$GITHUB_ENV"
           unzip -l "dist/${NAME}.zip"
 
       - name: 发布
@@ -44,12 +46,52 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$ARTIFACT" --repo "$GITHUB_REPOSITORY" --clobber
-          else
-            gh release create "$TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "$TAG — 超频模式 / Overclock Mode" \
-              --notes-file RELEASE_NOTES.md \
-              --attach "$ARTIFACT"
+          API="https://api.github.com/repos/${GITHUB_REPOSITORY}"
+          AUTH=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json")
+
+          python3 - "$TAG" > release.json <<'PY'
+          import json, sys
+          tag = sys.argv[1]
+          body = open('RELEASE_NOTES.md', encoding='utf-8').read()
+          print(json.dumps({
+              'tag_name': tag,
+              'name': f'{tag} — 超频模式 / Overclock Mode',
+              'body': body,
+              'draft': False,
+              'prerelease': False,
+          }, ensure_ascii=False))
+          PY
+
+          # 已有同名 release 就复用，没有才创建（重复触发不会报错）
+          code=$(curl -sS -o release.resp -w '%{http_code}' "${AUTH[@]}" "$API/releases/tags/$TAG")
+          if [ "$code" = "404" ]; then
+            code=$(curl -sS -o release.resp -w '%{http_code}' -X POST "${AUTH[@]}" \
+              -H "Content-Type: application/json" --data @release.json "$API/releases")
+            [ "$code" = "201" ] || { echo "create failed: $code"; cat release.resp; exit 1; }
+          elif [ "$code" != "200" ]; then
+            echo "lookup failed: $code"; cat release.resp; exit 1
           fi
+          REL_ID=$(python3 -c "import json;print(json.load(open('release.resp'))['id'])")
+
+          # 同名资产先删后传，保证可重跑
+          OLD=$(python3 -c "
+          import json, os
+          assets = json.load(open('release.resp')).get('assets', [])
+          name = os.environ['ASSET_NAME']
+          print(next((a['id'] for a in assets if a['name'] == name), ''))
+          ")
+          if [ -n "$OLD" ]; then
+            curl -sS -o /dev/null -X DELETE "${AUTH[@]}" "$API/releases/assets/$OLD"
+            echo "deleted old asset $OLD"
+          fi
+
+          code=$(curl -sS -o upload.resp -w '%{http_code}' -X POST "${AUTH[@]}" \
+            -H "Content-Type: application/zip" --data-binary @"$ARTIFACT" \
+            "$API/releases/$REL_ID/assets?name=$ASSET_NAME")
+          [ "$code" = "201" ] || { echo "upload failed: $code"; cat upload.resp; exit 1; }
+          python3 -c "
+          import json, os
+          a = json.load(open('upload.resp'))
+          print('release asset:', a['name'], a['size'], 'bytes')
+          print('download:', a['browser_download_url'])
+          "
