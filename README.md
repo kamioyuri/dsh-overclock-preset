@@ -104,6 +104,12 @@ node --test tests/preset.test.mjs
 
 欢迎 issue 与 PR。提交前请运行 `node --test tests/preset.test.mjs`，并保证 `lib/preset.js` 里没有 `{{…}}` 模板变量（persona 会被当作模板渲染）。
 
+发布走 tag，`release` workflow 会自动跑自检、打包 `dsh-overclock-preset-<版本>.zip` 并挂到 GitHub Release：
+
+```bash
+git tag v1.0.1 && git push origin v1.0.1
+```
+
 ## 许可证
 
 [MIT](LICENSE) © yuri (kamioyuri)

@@ -104,6 +104,12 @@ Nine structure assertions: required config keys, unique row ids, mutually exclus
 
 Issues and PRs are welcome. Before submitting, run `node --test tests/preset.test.mjs` and make sure `lib/preset.js` contains no `{{…}}` template variables (the persona is rendered as a template).
 
+Releases are cut by tag: the `release` workflow runs the assertions, builds `dsh-overclock-preset-<version>.zip`, and attaches it to the GitHub Release.
+
+```bash
+git tag v1.0.1 && git push origin v1.0.1
+```
+
 ## License
 
 [MIT](LICENSE) © yuri (kamioyuri)

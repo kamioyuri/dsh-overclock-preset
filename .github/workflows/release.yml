@@ -1,0 +1,55 @@
+name: release
+
+# 推 tag（v1.2.3）即发布：先跑结构自检，再把仓库内容打成
+# dsh-overclock-preset-<版本>.zip 挂到同名 GitHub Release 上。
+# 凭据用 runner 自带的 GITHUB_TOKEN，本地不需要任何 token。
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 结构自检
+        run: node --test tests/preset.test.mjs
+
+      - name: 打包
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          NAME="dsh-overclock-preset-${TAG#v}"
+          mkdir -p "dist/${NAME}"
+          # git archive 只打已提交内容，路径分隔符天然是 /，Windows 上打的包也能被 unzip 正常解压
+          git archive --format=tar HEAD | tar -x -C "dist/${NAME}"
+          rm -rf "dist/${NAME}/.git"
+          (cd dist && zip -qr "${NAME}.zip" "${NAME}")
+          echo "ARTIFACT=dist/${NAME}.zip" >> "$GITHUB_ENV"
+          unzip -l "dist/${NAME}.zip"
+
+      - name: 发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ARTIFACT" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$TAG — 超频模式 / Overclock Mode" \
+              --notes-file RELEASE_NOTES.md \
+              --attach "$ARTIFACT"
+          fi
