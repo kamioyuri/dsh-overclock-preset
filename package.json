@@ -17,7 +17,7 @@
     "lib",
     "cordis.patch.yml",
     "README.md",
-    "README.zh-CN.md"
+    "README.en.md"
   ],
   "scripts": {
     "test": "node --test tests/preset.test.mjs"
