@@ -1,129 +1,134 @@
-# dsh-overclock-preset ｜ 超频模式
+# dsh-overclock-preset ｜ Overclock Mode
 
-> 给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）加一个 agent 预设：**不为了省 token 而压缩、省略或截断输出**，并**默认自动启动多 agent 并行分工与汇总**。
+An agent preset plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) that **stops the model from trimming output for token economy**, and **orchestrates multiple sub-agents by default**.
 
-一个 dsh 插件。开启后预设选择器里多出「超频模式」，关掉插件它就消失，现有预设与部署默认值都不受影响。
+[English](README.md) ｜ [简体中文](README.zh-CN.md)
 
-> **English**: An agent-preset plugin for DeepSeek Harness (`dsh`) that stops the model from trimming output for token economy and orchestrates multiple sub-agents by default. Zero dependencies, no build step, no tools registered — it only declares one preset through the host registry.
+Enable the plugin and the preset picker gains an「超频模式 / Overclock Mode」entry. Disable it and the entry disappears — existing presets and the deployment default are untouched.
+
+Zero dependencies, no build step, no tools registered: it only declares one preset through the host registry.
 
 ---
 
-## 它解决什么
+## What it fixes
 
-默认的 agent 有两种「省」的倾向：一是为了省 token 把回答写短、把长清单截断、用「其余略」收尾；二是很少主动开多 agent，除非用户明确要求。这两种倾向在长任务上都会让交付物变成半成品。
+Two economy habits make long deliverables come back half-finished:
 
-「超频模式」用一份预设把这两件事反过来：
+1. **Short answers.** The model trims lists, stops mid-document, and closes with "the rest follows the same pattern".
+2. **No delegation.** It rarely fans work out to sub-agents unless the user explicitly asks.
 
-| 问题 | 这个预设的做法 |
+This preset flips both:
+
+| Problem | What the preset does |
 | --- | --- |
-| 回答写得短、动辄「以下省略」 | persona 明确「token 预算无上限」，禁止自我截断，列出禁止的省略形态 |
-| 长任务半途收尾 | 长内容分段续写到交付完整；多轮逼近用 `ralph`，轮数上限从 64 提到 96 |
-| 不主动开多 agent | 默认按 2–5 个子任务并行派发，主控负责合并去重与交叉验证 |
-| 工具说明里写着「克制使用」 | persona 显式声明优先级高于工具说明的「仅在用户明确要求时使用」 |
-| 压缩提前触发、工具输出被裁剪 | 压缩阈值后移（0.8 → 0.9）、逐字保留提高（0.16 → 0.3）、裁剪阈值放宽 6 倍 |
+| Answers written short, "rest omitted" | Persona declares an unbounded token budget and lists the omission patterns that are forbidden |
+| Long tasks end early | Long content continues from the breakpoint until complete; `ralph` rounds raised from 64 to 96 |
+| No multi-agent by default | Decomposes into 2–5 parallel sub-tasks; the lead agent merges, dedupes and cross-checks |
+| Tool descriptions say "use sparingly" | Persona explicitly outranks tool-level "only when the user asks for it" guidance |
+| Compaction fires early, tool output gets pruned | Compaction threshold pushed back (0.8 → 0.9), verbatim retention raised (0.16 → 0.3), prune threshold 6× wider |
 
-## 相对内置「标准模式」的差异
+## Differences from the built-in `standard` preset
 
-组装的其余部分与 standard 保持一致（27 行：24 个插件行 + 3 个隔离域）。
+Everything else stays identical (27 rows: 24 plugin rows + 3 isolation groups).
 
-| 维度 | 标准模式 | 超频模式 |
+| Dimension | standard | Overclock |
 | --- | --- | --- |
-| 人设 | 默认部署人设 | 预算无上限、禁止自我截断、默认多 agent |
-| 压缩阈值 | `thresholdRatio 0.8` / `retainRatio 0.16` | `0.9` / `0.3` |
-| 压缩余量 | `headroomTokens 65536` | `8192`（见下方说明） |
-| 工具结果裁剪 | 8192 字符（头 4096 / 尾 1024） | 49152 字符（头 36864 / 尾 8192） |
-| 委派深度 | 1 | 2 |
-| `workflow` 结果上限 | 50,000 字符 | 200,000 字符 |
-| `ralph` 轮数 | 64 | 96 |
+| Persona | deployment default | unbounded budget, no self-truncation, multi-agent by default |
+| Compaction threshold | `thresholdRatio 0.8` / `retainRatio 0.16` | `0.9` / `0.3` |
+| Compaction headroom | `headroomTokens 65536` | `8192` (see below) |
+| Tool-result pruning | 8,192 chars (head 4,096 / tail 1,024) | 49,152 chars (head 36,864 / tail 8,192) |
+| Delegation depth | 1 | 2 |
+| `workflow` result cap | 50,000 chars | 200,000 chars |
+| `ralph` rounds | 64 | 96 |
 
-**为什么把 `headroomTokens` 调小**：它不是「省 token」的开关，而是避免压缩策略直接失效。阈值是 `floor(min(W × ratio, W − O − headroom))`，默认 65536 会让 32K / 49K 这类小上下文模型算出**负的压力预算**，插件直接抛 `TargetPressureConfigError`、压缩完全不可用。调到 8192 之后，小模型能用，大模型的阈值反而整体后移（131K 窗口：标准模式 57,344 触发，超频模式 114,688 才触发）。
+**Why lower `headroomTokens`** — it is not a "save tokens" knob, it prevents the compaction policy from failing outright. The threshold is `floor(min(W × ratio, W − O − headroom))`. With the default 65,536, small-context models (32K / 49K) compute a **negative pressure budget**, the plugin throws `TargetPressureConfigError`, and compaction becomes unavailable. At 8,192 small models work, and large models compact *later* than default (131K window: 57,344 tokens in `standard` vs 114,688 here).
 
-## 安装
+## Install
 
-```powershell
-# 先把仓库克隆到本地任意目录
+```bash
 git clone https://github.com/kamioyuri/dsh-overclock-preset.git
 
-# 装进你正在用的 profile（desktop / web / 自建 profile 都行）
-dsh plugin --profile desktop add file:<仓库的绝对路径>
+# install into the profile you actually use (desktop / web / custom)
+dsh plugin --profile desktop add file:<absolute-path-to-the-clone>
 ```
 
-装完**重启 dsh**：宿主只在启动阶段读取 bundle 与预设声明。之后新建会话 → 打开预设选择器 → 选「超频模式」。
+Restart dsh afterwards — the host reads bundles and preset declarations at startup only. Then create a session, open the preset picker, and pick **超频模式 / Overclock Mode**.
 
-> `file:` 依赖是**复制**到 profile 的，改了源码要重新 `add`，或直接把 `lib/` 覆盖到 `~/.dsh/profiles/<profile>/node_modules/dsh-overclock-preset/`。
+> A `file:` dependency is **copied** into the profile. After editing the source, either re-run `add` or copy `lib/` over `~/.dsh/profiles/<profile>/node_modules/dsh-overclock-preset/`.
 
-## 验证
+## Verify
 
 ```powershell
-# 1) bundle 列表里出现包名
+# 1) the bundle list contains the package
 Select-String -Path "$env:USERPROFILE\.dsh\profiles\desktop\package.json" -Pattern overclock
 
-# 2) 组合树里出现插件行（desktop profile 被桌面端独占，CLI 只能对其它 profile 做这一步）
+# 2) the composed tree contains the plugin row
+#    (the desktop profile is owned by the desktop app, so the CLI can only do this for other profiles)
 dsh --profile <profile> --dump-config | Select-String overclock
 ```
 
-界面侧判据只有一条：**选择器里出现「超频模式」，且没有标注加载失败**。dsh 的预设列表会把加载失败的预设连同原因一起列出来，而不是隐藏，所以「看不见」= 没装上，「看见了但报错」= 组装里有行不能激活。
+The only UI-level check that matters: **the preset appears in the picker without a load-failure note**. dsh lists broken presets together with the reason instead of hiding them — so "not there" means not installed, "there but red" means a row inside the assembly failed to activate.
 
-## 卸载 / 临时关闭
+## Uninstall / temporarily disable
 
 ```powershell
-# 临时关闭：在 ~/.dsh/profiles/<profile>/cordis.patch.yml 里给这一行加 disabled: true
+# temporarily off: add disabled: true to this row in ~/.dsh/profiles/<profile>/cordis.patch.yml
 - id: overclock-preset
   disabled: true
 
-# 彻底卸载
+# full removal
 dsh plugin --profile desktop remove dsh-overclock-preset
 ```
 
-## 三个必须知道的限制
+## Three limits you must know
 
-1. **成本**。这个预设按设计会明显多耗 token（多 agent 并行 + 更长输出）。它是「我要一次做完整」时手动切过去的模式，不适合当默认值。
-2. **单轮输出上限不在预设里**。`maxTokens` 由 model route 决定（`models[].maxTokens`），预设只能做到「不主动压缩」，改不了适配器的物理上限。本地小模型想真正放开单轮长度，得去改模型配置。
-3. **预设只能在会话空白时切换**。这是 dsh 的规则（中途换工具集会让已记录的工具调用失效），不是本插件的限制。
+1. **Cost.** The preset deliberately spends more tokens (parallel agents + longer output). It is a mode you switch into when you want one complete pass, not a daily default.
+2. **Per-response output cap is not here.** `maxTokens` belongs to the model route (`models[].maxTokens`). A preset can decline to compress; it cannot raise the adapter's physical ceiling. For local small models, that is where you lift the single-turn length.
+3. **A preset can only be switched on a blank session.** This is a dsh rule (swapping tool catalogs mid-conversation invalidates recorded tool calls), not a plugin limitation.
 
-## 设计说明：为什么在代码里注册，而不是在 YAML 里声明
+## Design note: why register in code instead of declaring in YAML
 
-dsh 0.2.x 支持在 `cordis.patch.yml` 里插一行 `@deepseek-ai/dsh-agent-preset` 来声明预设，但这条路径对**第三方插件包**有个陷阱：
+dsh 0.2.x lets you declare a preset by inserting an `@deepseek-ai/dsh-agent-preset` row into `cordis.patch.yml`. For a **third-party package** that path has a trap:
 
-- 声明行的子插件用 Loader 的 `import.meta.resolve` 解析，锚点是**声明文件所在包的根**。
-- 插件被装进 `profiles/<profile>/node_modules` 之后，从那里解析不到宿主自带的 `@deepseek-ai/dsh-*`，整个预设会变成 broken。
+- Child rows of a declaration are resolved with the Loader's `import.meta.resolve`, anchored at the **package root of the file that declares them**.
+- Once the plugin lives in `profiles/<profile>/node_modules`, the host's own `@deepseek-ai/dsh-*` packages are not resolvable from there — the whole preset turns broken.
 
-而 `ctx.agentPresets.register()` 的解析锚点是**注册表服务自己**的装载位置（即 dsh 宿主包目录），所以无论插件装在哪个 profile 都能解析到宿主包。
+`ctx.agentPresets.register()` instead resolves against the **registry service's own install location** (the dsh host package dir), so it works no matter which profile the plugin is installed into.
 
-代价是本插件必须在宿主进程里跑一段 `apply`；好处是它**零 import、零依赖、不需要构建**，因此也没有供应链面和构建产物漂移的风险。附带效果：注册返回的 disposer 交给 `ctx.effect`，禁用插件时预设自动下线。
+The trade-off is that the plugin must run an `apply()` inside the host process; the upside is **zero imports, zero dependencies, no build artifacts to drift**. The disposer returned by `register()` goes to `ctx.effect`, so disabling the plugin unregisters the preset automatically.
 
-## 目录结构
+## Layout
 
 ```
 .
 ├── lib/
-│   ├── preset.js          # 预设本体：id / 展示元数据 / 27 行组装 / persona 正文
-│   └── index.js           # 插件入口：ctx.agentPresets.register(PRESET)
-├── cordis.patch.yml       # bundle 补丁层：把插件挂进 profile
-├── tests/preset.test.mjs  # 9 项结构自检（零依赖，node --test）
-├── .github/workflows/     # CI：跑自检
+│   ├── preset.js          # the preset itself: id / display metadata / 27 rows / persona text
+│   └── index.js           # plugin entry: ctx.agentPresets.register(PRESET)
+├── cordis.patch.yml       # bundle patch layer: mounts the plugin into a profile
+├── tests/preset.test.mjs  # 9 structure assertions (zero dependency, node --test)
+├── .github/workflows/     # CI: runs the assertions
 └── package.json
 ```
 
-## 自定义
+## Customize
 
-改 `lib/preset.js`，然后同步到 profile：
+Edit `lib/preset.js`, then sync it into the profile:
 
-- **更狠**：`tool-ralph.maxRounds` → 200，`tool-workflow.maxResultChars` → 500000。
-- **更省**：`maxDepth` 改回 1；或放宽 persona 里「只有三类可以直答」的门槛。
-- **换人设**：直接改 `PERSONA` 数组。它是 `deployment:persona-prefix`，每一轮都在上下文里，别写太长（当前约 1.3k 字符）。
+- **Harder**: `tool-ralph.maxRounds` → 200, `tool-workflow.maxResultChars` → 500000.
+- **Cheaper**: `maxDepth` back to 1; relax the "only three cases may answer directly" rule in the persona.
+- **Different persona**: rewrite the `PERSONA` array. It is `deployment:persona-prefix`, present in every request — keep it short (currently ~1.3k characters).
 
-改完跑一遍自检：
+Then run the assertions:
 
 ```bash
 node --test tests/preset.test.mjs
 ```
 
-## 兼容性
+## Compatibility
 
-- 需要 dsh 0.2.x（声明式预设注册表 `agentPresets`）。0.1.x 的 `.agent-presets/<id>/` 目录格式已被上游废弃，本插件不写那个目录。
-- 只依赖宿主自带包，不引入任何第三方依赖。
-- 未在 macOS / Linux 上实机验证；shell 行按 `process.platform` 自动在 `tool-bash` / `tool-pwsh` 之间二选一。
+- Requires dsh 0.2.x (the declarative preset registry, `agentPresets`). The 0.1.x `.agent-presets/<id>/` directory format is retired upstream; this plugin does not write it.
+- Depends only on host packages; no third-party dependencies.
+- Only verified on Windows so far. Shell rows pick `tool-bash` or `tool-pwsh` from `process.platform` automatically.
 
 ## License
 
