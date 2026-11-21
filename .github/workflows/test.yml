@@ -1,0 +1,33 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  preset-structure:
+    name: 预设结构自检 (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # 零依赖：不跑 npm install，直接跑自检
+      - name: 结构自检
+        run: node --test tests/preset.test.mjs
+
+      - name: 源码可解析（语法检查）
+        run: |
+          node --check lib/index.js
+          node --check lib/preset.js

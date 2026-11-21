@@ -1,0 +1,8 @@
+# 统一换行：仓库内文本一律 LF（Windows 上编辑也不会引入 CRLF 噪声）
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary

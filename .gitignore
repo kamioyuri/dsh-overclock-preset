@@ -1,0 +1,17 @@
+# 依赖与构建产物（本插件零依赖、无构建步骤，列在这里是为了防止误提交）
+node_modules/
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 本地实验
+*.local.*
+*.log
